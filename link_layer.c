@@ -15,6 +15,25 @@
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
+
+int writeSET(LinkLayer llParameters){
+ unsigned char buf[BUF_SIZE] = {0};
+    
+    buf[0] = 0x7E;
+    buf[1] = 0x03;
+    buf[2] = 0x03;
+    buf[3] = buf[1]^buf[2];
+    buf[4] = 0x7E;
+
+    int bytes = writeBytesSerialPort(buf, BUF_SIZE);
+    sleep(1);
+
+    printf("%d bytes written to serial port\n", bytes);
+    
+    return 0;
+    
+}
+
 int llOpenTx(LinkLayer llParameters)
 {
     // ----------------------------------------------------
@@ -31,30 +50,47 @@ int llOpenTx(LinkLayer llParameters)
     printf("Serial port %s opened\n", llParameters.serialPort);
 
     // Create string to send
-    unsigned char buf[BUF_SIZE] = {0};
-    
-    buf[0] = 0x7E;
-    buf[1] = 0x03;
-    buf[2] = 0x03;
-    buf[3] = buf[1]^buf[2];
-    buf[4] = 0x7E;
-
-
-    /*for (int i = 0; i < BUF_SIZE; i++)
-    {
-        buf[i] = 'a' + i % 26;
-    }*/
-
-    // In non-canonical mode, '\n' does not end the writing.
-    // Test this condition by placing a '\n' in the middle of the buffer.
-    // The whole buffer must be sent even with the '\n'.
-    //buf[5] = '\n';
-
-    int bytes = writeBytesSerialPort(buf, BUF_SIZE);
-    printf("%d bytes written to serial port\n", bytes);
-
+   
     // Wait until all bytes have been written to the serial port
-    sleep(1);
+    writeSET(llParameters);    
+
+    volatile int STOP = FALSE;
+    int nBytesBuf = 0;
+    volatile int firstF = FALSE;
+    int check[] = {0x7E, 0X01, 0X07, 0X01^0X07, 0X7E};
+    int index = 0;
+
+    while (STOP == FALSE)
+    {
+        // Read one byte from serial port.
+        // NOTE: You must check how many bytes were actually read by reading the return value.
+        // In this example, we assume that the byte is always read, which may not be true.
+        unsigned char byte;
+        int bytes = readByteSerialPort(&byte);
+        nBytesBuf += bytes;
+        
+        if(byte == check[index]){
+        }
+        else if(byte != check[index]){
+        printf("error byte mismtch");
+        STOP = TRUE;        
+        }
+
+        printf("var = 0x%02X\n", (unsigned int)(byte & 0xFF));
+
+
+        if (!firstF && byte == 0x7E)
+        {
+           firstF = TRUE;
+        }
+        else if(firstF && byte == 0x7E){
+            STOP = TRUE;
+        }
+        index++;
+
+    }
+    
+
 
     // Close serial port
     if (closeSerialPort() < 0)
@@ -92,7 +128,8 @@ int llOpenRx(LinkLayer llParameters)
     volatile int STOP = FALSE;
     int nBytesBuf = 0;
     volatile int firstF = FALSE;
-
+    int check[] = {0x7E, 0X01, 0X07, 0X01^0X07, 0X7E};
+    int index = 0;
 
     while (STOP == FALSE)
     {
@@ -102,8 +139,16 @@ int llOpenRx(LinkLayer llParameters)
         unsigned char byte;
         int bytes = readByteSerialPort(&byte);
         nBytesBuf += bytes;
+        
+        if(byte == check[index]){
+        }
+        else if(byte != check[index]){
+        printf("error byte mismtch");
+        STOP = TRUE;        
+        }
 
-        printf("Byte received: %p\n", byte);
+        printf("var = 0x%02X\n", (unsigned int)(byte & 0xFF));
+
 
         if (!firstF && byte == 0x7E)
         {
@@ -112,10 +157,11 @@ int llOpenRx(LinkLayer llParameters)
         else if(firstF && byte == 0x7E){
             STOP = TRUE;
         }
+        index++;
 
     }
+    
 
-    printf("Total bytes received: %d\n", nBytesBuf);
 
     // Close serial port
     if (closeSerialPort() < 0)
