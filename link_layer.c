@@ -8,13 +8,34 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include <signal.h>
+#include <errno.h>
+
+
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 #define BUF_SIZE 256
 
+#define TIMEOUT 3
+#define MAX_RETRANSMISSIONS 3
+
+volatile sig_atomic_t alarmEnabled = FALSE;
+volatile sig_atomic_t alarmCount = 0;
+
+
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
+
+
+void alarmHandler(int signal)
+{
+    alarmEnabled = FALSE;
+    alarmCount++;
+
+    printf("Alarm #%d received\n", alarmCount);
+}
+
 
 int writeSET(LinkLayer llParameters){
  unsigned char buf[BUF_SIZE] = {0};
@@ -49,6 +70,14 @@ int llOpenTx(LinkLayer llParameters)
 
     printf("Serial port %s opened\n", llParameters.serialPort);
 
+    struct sigaction act = {0};
+    act.sa_handler = &alarmHandler;
+    if (sigaction(SIGALRM, &act, NULL) == -1)
+    {
+        perror("sigaction");
+        return -1;
+    }
+
     // Create string to send
    
     // Wait until all bytes have been written to the serial port
@@ -57,37 +86,56 @@ int llOpenTx(LinkLayer llParameters)
     volatile int STOP = FALSE;
     int nBytesBuf = 0;
     volatile int firstF = FALSE;
-    int check[] = {0x7E, 0X01, 0X07, 0X01^0X07, 0X7E};
+    int check[] = {0x7E, 0X03, 0X03, 0X03^0X03, 0X7E};
     int index = 0;
+    int retransmissions = 0;
 
-    while (STOP == FALSE)
+    while (STOP == FALSE && retransmissions < MAX_RETRANSMISSIONS)
     {
-        // Read one byte from serial port.
-        // NOTE: You must check how many bytes were actually read by reading the return value.
-        // In this example, we assume that the byte is always read, which may not be true.
-        unsigned char byte;
-        int bytes = readByteSerialPort(&byte);
-        nBytesBuf += bytes;
         
-        if(byte == check[index]){
-        }
-        else if(byte != check[index]){
-        printf("error byte mismtch");
-        STOP = TRUE;        
-        }
+        alarmEnabled = TRUE;
+        alarm(TIMEOUT);
 
-        printf("var = 0x%02X\n", (unsigned int)(byte & 0xFF));
-
-
-        if (!firstF && byte == 0x7E)
+        while (alarmEnabled && STOP == FALSE)
         {
-           firstF = TRUE;
-        }
-        else if(firstF && byte == 0x7E){
-            STOP = TRUE;
-        }
-        index++;
+            
+            unsigned char byte;
+            int bytes = readByteSerialPort(&byte);
+            nBytesBuf += bytes;
+            
+            if(byte == check[index]){
+            }
+            else if(byte != check[index]){
+            printf("error byte mismatch");
+            STOP = TRUE;        
+            }
 
+            printf("var = 0x%02X\n", (unsigned int)(byte & 0xFF));
+
+
+            if (!firstF && byte == 0x7E)
+            {
+            firstF = TRUE;
+            }
+            else if(firstF && byte == 0x7E){
+                STOP = TRUE;
+            }
+            index++;
+        }
+    }
+    alarm(0);
+    alarmEnabled = FALSE;
+
+    if (STOP == FALSE){
+        retransmissions++;
+        printf("TIMEOUT!! Retransmission %d\n", retransmissions);
+        index = 0;
+        firstF = FALSE;
+        writeSET(llParameters);
+    }
+
+    if (STOP == TRUE){
+        printf("Frame received successfully");
     }
     
 
@@ -128,7 +176,7 @@ int llOpenRx(LinkLayer llParameters)
     volatile int STOP = FALSE;
     int nBytesBuf = 0;
     volatile int firstF = FALSE;
-    int check[] = {0x7E, 0X01, 0X07, 0X01^0X07, 0X7E};
+    int check[] = {0x7E, 0X03, 0X03, 0X03^0X03, 0X7E};
     int index = 0;
 
     while (STOP == FALSE)
