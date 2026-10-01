@@ -46,7 +46,7 @@ int writeSET(LinkLayer llParameters){
     buf[3] = buf[1]^buf[2];
     buf[4] = 0x7E;
 
-    int bytes = writeBytesSerialPort(buf, BUF_SIZE);
+    int bytes = writeBytesSerialPort(buf, 5);
     sleep(1);
 
     printf("%d bytes written to serial port\n", bytes);
@@ -90,7 +90,7 @@ int llOpenTx(LinkLayer llParameters)
     int index = 0;
     int retransmissions = 0;
 
-    while (STOP == FALSE && retransmissions < MAX_RETRANSMISSIONS)
+    while (STOP == FALSE && retransmissions <= MAX_RETRANSMISSIONS)
     {
         
         alarmEnabled = TRUE;
