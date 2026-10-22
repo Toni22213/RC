@@ -210,22 +210,109 @@ int llOpenRx(LinkLayer llParameters)
 ////////////////////////////////////////////////
 // LLSEND
 ////////////////////////////////////////////////
+
 int llSend(const unsigned char *buf, int bufSize)
 {
-    // TODO: Implement this function
+    unsigned char body[BUF_SIZE];
+    int n = buildBody(body, 0x03, (ns << 6), buf, bufSize);
 
+    int retries = 0;
+    int acked = FALSE;
+
+    while (!acked && retries <= MAX_RETRANSMISSIONS)
+    {
+        writeFrame(body, n);
+
+        alarmEnabled = TRUE;
+        alarm(TIMEOUT);
+
+        while (alarmEnabled && !acked)
+        {
+            unsigned char r[BUF_SIZE];
+            int len = readFrame(r, BUF_SIZE);
+
+            unsigned char expectedRR = 0x01 | (((ns + 1) & 1) << 6);
+
+            if (len >= 3 &&
+                r[0] == 0x03 &&
+                r[1] == expectedRR &&
+                r[2] == (r[0] ^ r[1]))
+            {
+                acked = TRUE;
+            }
+        }
+
+        alarm(0);
+        alarmEnabled = FALSE;
+
+        if (!acked)
+        {
+            retries++;
+            printf("llSend timeout %d\n", retries);
+        }
+    }
+
+    if (!acked)
+        return -1;
+
+    ns ^= 1;
     return 0;
 }
+   
 
 ////////////////////////////////////////////////
 // LLRECEIVE
 ////////////////////////////////////////////////
+
 int llReceive(unsigned char *packet)
 {
-    // TODO: Implement this function
+    while (1)
+    {
+        unsigned char r[BUF_SIZE];
+        int len = readFrame(r, BUF_SIZE);
 
-    return 0;
+        // Need at least A, C, BCC1, one data byte, BCC2
+        if (len < 5)
+            continue;
+
+        // Check BCC1 (header integrity)
+        if (r[0] != 0x03 || r[2] != (r[0] ^ r[1]))
+            continue;
+
+        // Check if this is the I-frame we expect (N(S) == nr)
+        if (r[1] != (nr << 6))
+        {
+            // Duplicate: re-send RR with current nr, don't deliver
+            unsigned char ack[3];
+            int an = buildBody(ack, 0x03, 0x01 | (nr << 6), NULL, 0);
+            writeFrame(ack, an);
+            continue;
+        }
+
+        // Check BCC2 (payload integrity)
+        int dlen = len - 4;
+        unsigned char bcc2 = 0;
+        for (int i = 0; i < dlen; i++)
+            bcc2 ^= r[3 + i];
+
+        if (bcc2 != r[3 + dlen])
+            continue;   // corrupt -> discard, don't touch nr
+
+        // Valid in-order frame: deliver data
+        for (int i = 0; i < dlen; i++)
+            packet[i] = r[3 + i];
+
+        nr ^= 1;
+
+        // Send RR with new nr
+        unsigned char ack[3];
+        int an = buildBody(ack, 0x03, 0x01 | (nr << 6), NULL, 0);
+        writeFrame(ack, an);
+
+        return dlen;
+    }
 }
+  
 
 ////////////////////////////////////////////////
 // LLCLOSE
