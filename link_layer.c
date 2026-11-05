@@ -86,6 +86,7 @@ static int readFrame(unsigned char *body, int maxLen){
     int idx = 0;
 
     while (1){
+        if (!alarmEnabled) return -1;
         unsigned char byte;
         if (readByteSerialPort(&byte) <= 0) continue;
 
@@ -208,6 +209,8 @@ int llOpenTx(LinkLayer llParameters)
         while (alarmEnabled && !gotUA)
         {
             len = readFrame(r, BUF_SIZE);
+            if (len < 0) break; // Interrupted by alarm, break the loop to trigger timeout
+
             if (len >= 3 && matchControl(A_TX, C_UA, r, len))
                 gotUA = TRUE;
         }
@@ -255,7 +258,7 @@ int llOpenRx(LinkLayer llParameters)
         closeSerialPort();
         return -1;
     }
-
+    alarmEnabled = TRUE;
     while(1){
         unsigned char r[BUF_SIZE];
         int len = readFrame(r, BUF_SIZE);
@@ -300,6 +303,7 @@ int llSend(const unsigned char *buf, int bufSize)
         while (alarmEnabled && !gotResponse)
         {
             len = readFrame(r, BUF_SIZE);
+            if (len < 0) break;
             if (len < 3) continue;
             if (matchAck(r, len, &ac)) {
                 gotResponse = TRUE;
@@ -338,10 +342,13 @@ int llSend(const unsigned char *buf, int bufSize)
 
 int llReceive(unsigned char *packet)
 {
+    alarmEnabled = TRUE;
     while (1)
     {
         unsigned char r[BUF_SIZE];
         int len = readFrame(r, BUF_SIZE);
+
+         if (len < 0) continue;
 
         // Need at least A, C, BCC1, one data byte, BCC2
         if (len < 5)
@@ -397,33 +404,41 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
+////////////////////////////////////////////////
+// LLCLOSE
+////////////////////////////////////////////////
 int llCloseTx()
 {
     unsigned char r[BUF_SIZE];
     int len = 0;
-    int gotUA = FALSE;
+    int gotDisc = FALSE;
 
     for (int attempt = 0; attempt <= gMaxRetries; attempt++)
     {
         sendControlFrame(A_TX, C_DISC);
         if (attempt > 0) statRetransmissions++;
 
-        gotUA = FALSE;
+        gotDisc = FALSE;
         alarmEnabled = TRUE;
         alarm(gTimeout);
 
-        while (alarmEnabled && !gotUA)
+        while (alarmEnabled && !gotDisc)
         {
             len = readFrame(r, BUF_SIZE);
-            if (len >= 3 && matchControl(A_TX, C_UA, r, len))
-                gotUA = TRUE;
+            if (len < 0) break; // Interrupted by alarm
+
+            // Rx sends DISC back. We must reply with UA and close.
+            if (len >= 3 && matchControl(A_TX, C_DISC, r, len)) {
+                sendControlFrame(A_TX, C_UA);
+                gotDisc = TRUE;
+            }
         }
 
         alarm(0);
         alarmEnabled = FALSE;
 
-        if (gotUA) {
-            printf("UA received, closing Tx\n");
+        if (gotDisc) {
+            printf("DISC received, UA sent, closing Tx\n");
             break;
         }
         statTimeouts++;
@@ -437,38 +452,41 @@ int llCloseTx()
     printf("  Timeouts: %lu\n", statTimeouts);
 
     closeSerialPort();
-    return gotUA ? 0 : -1;
+    return gotDisc ? 0 : -1;
 }
 
 int llCloseRx()
 {
     unsigned char r[BUF_SIZE];
+    int len = 0;
+    int gotUa = FALSE;
 
+    // 1. Wait for Tx to send DISC
     while (1)
     {
-        int len = readFrame(r, BUF_SIZE);
+        len = readFrame(r, BUF_SIZE);
+        if (len < 0) continue;
 
-        if (len < 3)
-            continue;
-
-        if (matchControl(A_TX, C_DISC, r, len))
+        if (len >= 3 && matchControl(A_TX, C_DISC, r, len))
         {
+            // 2. Reply with DISC
             sendControlFrame(A_TX, C_DISC);
-
-            int gotUA = FALSE;
+            
+            // 3. Wait for UA from Tx
             alarmEnabled = TRUE;
             alarm(gTimeout);
 
-            while (alarmEnabled && !gotUA)
+            while (alarmEnabled && !gotUa)
             {
                 len = readFrame(r, BUF_SIZE);
+                if (len < 0) break;
                 if (len >= 3 && matchControl(A_TX, C_UA, r, len))
-                    gotUA = TRUE;
+                    gotUa = TRUE;
             }
 
             alarm(0);
             alarmEnabled = FALSE;
-
+            
             printf("DISC received, DISC sent, connection closed\n");
             break;
         }
